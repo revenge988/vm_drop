@@ -1,0 +1,8 @@
+Inbox/
+Outbox/
+__pycache__/
+*.pyc
+.host_config.json
+guest_config.json
+host_config.json
+.idea/
