@@ -1,7 +1,7 @@
 """
-VM Drop Host — Ana PC'de çalışır.
-VMware penceresinin üstüne yapışan bırakma çubuğu:
-dosyayı oraya sürükle-bırak → ilgili sanalın Masaüstü'ne gider.
+VM Drop Host — Ana PC.
+VMware üstüne yapışan şeride dosya bırak → sanal Masaüstü.
+restrict_backdoor=TRUE iken native DnD olmaz; bu araç ağ kullanır.
 """
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ import json
 import socket
 import threading
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -18,7 +17,9 @@ from ctypes import wintypes
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 
-APP_DIR = Path(__file__).resolve().parent
+from common import app_dir, open_firewall_tcp, probe_agent, vmware_arp_ips
+
+APP_DIR = app_dir()
 CFG_PATH = APP_DIR / "host_config.json"
 DISCOVER_PORT = 17866
 BAR_H = 42
@@ -67,7 +68,6 @@ def find_vmware_windows() -> list[tuple[int, str]]:
             return True
         title = window_title(hwnd)
         if "VMware Workstation" in title or "VMware Workstation Pro" in title:
-            # Örn: "PC-2 - VMware Workstation"
             found.append((int(hwnd), title))
         return True
 
@@ -76,7 +76,6 @@ def find_vmware_windows() -> list[tuple[int, str]]:
 
 
 def guess_vm_name(title: str) -> str:
-    # "PC-2 - VMware Workstation" -> PC-2
     if " - " in title:
         return title.split(" - ", 1)[0].strip()
     return title.strip()
@@ -92,7 +91,10 @@ def load_cfg() -> dict:
 
 
 def save_cfg(cfg: dict):
-    CFG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    try:
+        CFG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def send_file(ip: str, port: int, path: Path) -> str:
@@ -127,7 +129,7 @@ class DropBar(tk.Toplevel):
 
         self.lbl = tk.Label(
             self,
-            text=f"⬇  {self.vm_name} — dosyayı BURAYA bırak (Masaüstü'ne gider)",
+            text=f"⬇  {self.vm_name} — dosyayı BURAYA bırak",
             bg="#1d4ed8", fg="white",
             font=("Segoe UI", 11, "bold"),
             padx=8,
@@ -140,7 +142,7 @@ class DropBar(tk.Toplevel):
             except Exception:
                 pass
 
-        self.bind("<Button-3>", self._ask_ip)  # sağ tık = IP ayarla
+        self.bind("<Button-3>", self._ask_ip)
         self.lbl.bind("<Button-3>", self._ask_ip)
 
     def _on_drop(self, files):
@@ -163,6 +165,12 @@ class DropBar(tk.Toplevel):
         self.lbl.configure(bg=color)
         self.after(900, lambda: (self.configure(bg="#1d4ed8"), self.lbl.configure(bg="#1d4ed8")))
 
+    def set_hint(self, ip: str | None):
+        if ip:
+            self.lbl.configure(text=f"⬇  {self.vm_name} ({ip}) — dosyayı BURAYA bırak")
+        else:
+            self.lbl.configure(text=f"⬇  {self.vm_name} — IP yok, sağ tıkla")
+
     def follow(self):
         rect = window_rect(self.hwnd)
         if not rect:
@@ -170,7 +178,6 @@ class DropBar(tk.Toplevel):
             return
         l, t, r, b = rect
         w = max(200, r - l)
-        # VMware başlık/menü altına yapışık şerit
         y = t + 70
         self.geometry(f"{w}x{BAR_H}+{l}+{y}")
         try:
@@ -184,38 +191,41 @@ class HostApp:
         self.cfg = load_cfg()
         self.root = tk.Tk()
         self.root.title("VM Drop Host — Ana PC")
-        self.root.geometry("520x380")
+        self.root.geometry("560x420")
         self.root.configure(bg="#0b1220")
 
-        self.status = tk.StringVar(value="VMware pencereleri aranıyor...")
-        self.discovered: dict[str, str] = {}  # name -> ip
+        self.status = tk.StringVar(value="VMware / sanal agent aranıyor...")
+        self.discovered: dict[str, str] = {}
         self.bars: dict[int, DropBar] = {}
+        self._scan_lock = threading.Lock()
+
+        open_firewall_tcp(int(self.cfg.get("port", 17865)), "VM Drop Host")
 
         tk.Label(self.root, text="VM Drop Host", bg="#0b1220", fg="#e8eefc",
                  font=("Segoe UI", 16, "bold")).pack(pady=(12, 2))
         tk.Label(
             self.root,
-            text="VMware penceresinin üstündeki mavi şeride dosya bırak.\n"
-                 "Her sanalda guest_agent.py açık olmalı.\n"
-                 "Şeride sağ tık = o sanalın IP'sini ayarla.",
-            bg="#0b1220", fg="#93a4c3", font=("Segoe UI", 9), justify="center"
+            text="Backdoor kapalı kalsın (oyun için).\n"
+                 "Mavi şeride bırak → ağ ile sanal Masaüstü'ne gider.\n"
+                 "Şeride sağ tık = IP | Sarı yazı sanal IP'sini gösterir.",
+            bg="#0b1220", fg="#93a4c3", font=("Segoe UI", 9), justify="center",
         ).pack()
 
         if not WINDND_OK:
-            tk.Label(self.root, text="⚠ windnd yok — pip install windnd",
+            tk.Label(self.root, text="⚠ windnd yok — sürükle-bırak çalışmayabilir",
                      bg="#0b1220", fg="#fbbf24", font=("Segoe UI", 9, "bold")).pack()
 
         self.listbox = tk.Listbox(self.root, bg="#121a2b", fg="#e8eefc",
-                                  font=("Consolas", 10), height=10,
+                                  font=("Consolas", 10), height=11,
                                   selectbackground="#1d4ed8")
         self.listbox.pack(fill="both", expand=True, padx=14, pady=10)
 
         btn = tk.Frame(self.root, bg="#0b1220")
         btn.pack(fill="x", padx=14, pady=(0, 8))
-        tk.Button(btn, text="IP eşlemesini düzenle", command=self.edit_mapping,
-                  bg="#1a2438", fg="white", relief="flat",
-                  font=("Segoe UI", 9), padx=8, pady=4, cursor="hand2").pack(side="left")
-        tk.Button(btn, text="Yenile", command=self.refresh_list,
+        tk.Button(btn, text="IP tara / yenile", command=self.scan_now,
+                  bg="#3b82f6", fg="white", relief="flat",
+                  font=("Segoe UI", 9, "bold"), padx=10, pady=4, cursor="hand2").pack(side="left")
+        tk.Button(btn, text="IP elle ayarla", command=self.edit_mapping,
                   bg="#1a2438", fg="white", relief="flat",
                   font=("Segoe UI", 9), padx=8, pady=4, cursor="hand2").pack(side="left", padx=6)
 
@@ -223,8 +233,50 @@ class HostApp:
                  font=("Segoe UI", 9, "bold"), anchor="w").pack(fill="x", padx=14, pady=(0, 10))
 
         threading.Thread(target=self._discover_loop, daemon=True).start()
+        threading.Thread(target=self._scan_loop, daemon=True).start()
         self.root.after(400, self._tick)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def scan_now(self):
+        threading.Thread(target=self._scan_agents, daemon=True).start()
+
+    def _scan_loop(self):
+        while True:
+            self._scan_agents()
+            time.sleep(5)
+
+    def _scan_agents(self):
+        if not self._scan_lock.acquire(blocking=False):
+            return
+        try:
+            port = int(self.cfg.get("port", 17865))
+            candidates = list(vmware_arp_ips())
+            # bilinen hedefler
+            candidates.extend(self.cfg.get("targets", {}).values())
+            candidates.extend(self.discovered.values())
+            # PC-2 NAT tipik
+            for tip in ("192.168.157.129", "192.168.157.128", "192.168.61.128"):
+                if tip not in candidates:
+                    candidates.append(tip)
+            seen = set()
+            for ip in candidates:
+                if not ip or ip in seen:
+                    continue
+                seen.add(ip)
+                info = probe_agent(ip, port, timeout=0.45)
+                if not info or not info.get("ok"):
+                    continue
+                name = (info.get("name") or "").strip()
+                if not name:
+                    continue
+                self.discovered[name] = ip
+                targets = self.cfg.setdefault("targets", {})
+                targets[name] = ip
+            save_cfg(self.cfg)
+            self.root.after(0, lambda: self.status.set(
+                f"Tarama: {len(self.discovered)} agent | {self.discovered}"))
+        finally:
+            self._scan_lock.release()
 
     def _discover_loop(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -238,17 +290,14 @@ class HostApp:
             try:
                 data, addr = sock.recvfrom(256)
                 msg = data.decode("utf-8", errors="ignore")
-                # VMDROP|PC-2|17865
                 if msg.startswith("VMDROP|"):
                     parts = msg.split("|")
                     if len(parts) >= 3:
                         name = parts[1].strip()
                         self.discovered[name] = addr[0]
-                        # config'e otomatik yaz (yoksa)
                         targets = self.cfg.setdefault("targets", {})
-                        if name not in targets or not targets[name]:
-                            targets[name] = addr[0]
-                            save_cfg(self.cfg)
+                        targets[name] = addr[0]
+                        save_cfg(self.cfg)
             except socket.timeout:
                 continue
             except Exception:
@@ -256,14 +305,14 @@ class HostApp:
 
     def resolve_ip(self, vm_name: str) -> str | None:
         targets = self.cfg.get("targets", {})
-        ip = targets.get(vm_name) or self.discovered.get(vm_name)
-        return ip
+        return targets.get(vm_name) or self.discovered.get(vm_name)
 
     def ask_ip_for(self, vm_name: str):
-        cur = self.resolve_ip(vm_name) or ""
+        cur = self.resolve_ip(vm_name) or "192.168.157.129"
         ip = simpledialog.askstring(
             "Sanal IP",
-            f"{vm_name} için sanalın IP adresini yaz\n(ör. 192.168.x.x):",
+            f"{vm_name} IP (NAT genelde 192.168.157.x):\n"
+            f"Sanalda VM Drop sarı satırdaki IP'yi yaz.",
             initialvalue=cur,
             parent=self.root,
         )
@@ -274,16 +323,14 @@ class HostApp:
             self.refresh_list()
 
     def edit_mapping(self):
-        # basit: seçili satırdan isim al
         names = sorted(set(
             [guess_vm_name(t) for _, t in find_vmware_windows()]
             + list(self.cfg.get("targets", {}).keys())
             + list(self.discovered.keys())
         ))
         if not names:
-            messagebox.showinfo("IP", "Önce bir VMware penceresi aç.")
+            messagebox.showinfo("IP", "Önce VMware penceresi aç.")
             return
-        # ilk bulunanı sor — çoklu için sırayla
         for name in names:
             self.ask_ip_for(name)
 
@@ -295,14 +342,17 @@ class HostApp:
         for hwnd, title in vms:
             name = guess_vm_name(title)
             ip = self.resolve_ip(name) or "?"
-            self.listbox.insert("end", f"{name:8}  IP={ip:15}  | {title}")
+            self.listbox.insert("end", f"{name:8}  IP={ip:16}  | {title}")
         for name, ip in sorted(self.discovered.items()):
-            self.listbox.insert("end", f"[keşfedildi] {name} → {ip}")
+            self.listbox.insert("end", f"[agent] {name} → {ip}")
 
     def handle_drop(self, vm_name: str, paths: list[Path], bar: DropBar):
         ip = self.resolve_ip(vm_name)
         if not ip:
-            self.status.set(f"{vm_name} IP bilinmiyor — şeride sağ tıkla")
+            self._scan_agents()
+            ip = self.resolve_ip(vm_name)
+        if not ip:
+            self.status.set(f"{vm_name} IP yok — sağ tıkla veya 'IP tara'")
             bar.flash(False)
             self.ask_ip_for(vm_name)
             ip = self.resolve_ip(vm_name)
@@ -310,11 +360,18 @@ class HostApp:
                 return
         port = int(self.cfg.get("port", 17865))
 
+        # önce ping
+        info = probe_agent(ip, port, timeout=1.5)
+        if not info:
+            self.status.set(f"Bağlanamadı {ip}:{port} — sanalda VM Drop açık mı? Firewall?")
+            bar.flash(False)
+            return
+
         def work():
             ok_all = True
             for p in paths:
                 try:
-                    self.root.after(0, lambda n=p.name: self.status.set(f"Gönderiliyor: {n} → {vm_name}"))
+                    self.root.after(0, lambda n=p.name: self.status.set(f"Gönderiliyor: {n} → {vm_name} ({ip})"))
                     saved = send_file(ip, port, p)
                     self.root.after(0, lambda n=p.name, s=saved: self.status.set(f"OK: {n} → {s}"))
                 except Exception as e:
@@ -326,7 +383,6 @@ class HostApp:
 
     def _tick(self):
         vms = {hwnd: title for hwnd, title in find_vmware_windows()}
-        # eski barları kapat
         for hwnd in list(self.bars.keys()):
             if hwnd not in vms:
                 try:
@@ -334,13 +390,14 @@ class HostApp:
                 except Exception:
                     pass
                 del self.bars[hwnd]
-        # yenileri ekle / takip et
         for hwnd, title in vms.items():
             if hwnd not in self.bars:
                 self.bars[hwnd] = DropBar(self.root, hwnd, title, self)
             else:
                 self.bars[hwnd].vm_title = title
                 self.bars[hwnd].vm_name = guess_vm_name(title)
+            name = guess_vm_name(title)
+            self.bars[hwnd].set_hint(self.resolve_ip(name))
             self.bars[hwnd].follow()
         self.refresh_list()
         self.root.after(400, self._tick)
@@ -358,9 +415,6 @@ class HostApp:
 
 
 def main():
-    if not WINDND_OK:
-        # yine aç, uyarı göster
-        pass
     HostApp().run()
 
 

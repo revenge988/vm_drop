@@ -15,6 +15,7 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --hidden-import windnd ^
   --hidden-import host_drop ^
   --hidden-import guest_agent ^
+  --hidden-import common ^
   "vm_drop_app.py"
 if errorlevel 1 goto hata
 
