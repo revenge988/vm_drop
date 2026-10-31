@@ -1,20 +1,17 @@
 # VM Drop
 
-VMware Tools kopyala-yapıştır / sürükle-bırak kapalıyken Ana PC → Sanal PC dosya aktarımı.
+VMware Tools kopyala-yapıştır kapalıyken Ana PC → Sanal PC dosya aktarımı.
 
-## Sanal PC (bir kez)
+## Tek EXE (önerilen)
 
-1. Bu repoyu ZIP indirip aç
-2. `RUN_SANAL_PC.bat` çalıştır
-3. Sanal adını VMware sekmesiyle aynı yap (`PC-1`, `PC-2`, …)
-4. İsteğe bağlı: `KUR_SANAL_AUTOSTART.bat`
+Release'den `VM_Drop.exe` indir — **Python gerekmez**.
 
-Gereksinim: Python 3 + ağ (Bridged / Host-only)
+1. Ana PC'de ve her sanalda `VM_Drop.exe` çalıştır
+2. Açılışta seç:
+   - **Ana PC** → VMware üstündeki mavi şeride dosya bırak
+   - **Sanal PC** → adı `PC-1` / `PC-2` yap, dinlemede kalsın
+3. Dosya sanalın **Masaüstü**ne iner
 
-## Ana PC
+Ağ: Bridged veya Host-only. IP gelmezse şeride sağ tık.
 
-1. `RUN_ANA_PC.bat` çalıştır
-2. VMware penceresinin üstündeki **mavi şeride** dosya bırak
-3. IP gelmezse şeride sağ tık → sanal IP yaz
-
-Dosya sanalın **Masaüstü**ne iner.
+Download: [Releases](https://github.com/revenge988/vm_drop/releases)
